@@ -19,7 +19,8 @@ import {
     InheritanceDef,
     InversePropertyDef,
     ToRawLineData,
-    SchemaNames
+    SchemaNames,
+    IFCGLOBALLYUNIQUEID
 } from "./ifc-schema";
 
 declare var __WASM_PATH__:string;
@@ -137,6 +138,7 @@ export interface Alignment {
     FlatCoordinationMatrix: Array<number>;
     Horizontal: AlignmentSegment;
     Vertical: AlignmentSegment;
+    Absolute: AlignmentSegment;
 }
 
 export interface IfcGeometry {
@@ -146,6 +148,86 @@ export interface IfcGeometry {
     GetIndexDataSize(): number;
     GetSweptDiskSolid(): SweptDiskSolid;
     delete(): void;
+}
+
+export interface Buffers {
+    fvertexData: Array<number>;
+    indexData: Array<number>;
+}
+
+export interface AABB {
+    GetBuffers(): Buffers;
+    SetValues(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number): void;
+}
+
+export interface Extrusion {
+    GetBuffers(): Buffers;
+    SetValues(profile_: Array<number>, dir_: Array<number>, len_: number): void;
+}
+
+export interface Sweep {
+    GetBuffers(): Buffers;
+    SetValues( 
+        scaling: number,
+        closed: boolean,
+        profile: Array<number>,
+        directrix: Array<number>,
+        initialNormal?: Array<number>,
+        rotate90?: boolean,
+        optimize?: boolean
+      ): void;
+}
+
+export interface Revolution {
+    GetBuffers(): Buffers;
+    SetValues(profile_: Array<number>, transform_: Array<number>, startDegrees_: number, endDegrees_: number, numRots_: number): void;
+}
+
+export interface CylindricalRevolve {
+    GetBuffers(): Buffers;
+    SetValues(transform_: Array<number>, startDegrees_: number, endDegrees_: number, minZ_: number, maxZ_: number, numRots_: number, radius_: number): void;
+}
+
+export interface Parabola {
+    GetBuffers(): Buffers;
+    SetValues(segments: number,
+        startPointX: number,
+        startPointY: number,
+        startPointZ: number,
+        horizontalLength: number,
+        startHeight: number,
+        startGradient: number,
+        endGradient: number): void;
+}
+
+export interface Clothoid {
+    GetBuffers(): Buffers;
+    SetValues(segments: number,
+        startPointX: number,
+        startPointY: number,
+        startPointZ: number,
+        ifcStartDirection: number,
+        StartRadiusOfCurvature: number,
+        EndRadiusOfCurvature: number,
+        SegmentLength: number): void;
+}
+
+export interface Arc {
+    GetBuffers(): Buffers;
+    SetValues(        
+        radiusX: number,
+        radiusY: number,
+        numSegments: number,
+        placement: Array<number>,
+        startRad?: number,
+        endRad?: number,
+        swap?: boolean,
+        normalToCenterEnding?: boolean): void;
+}
+
+export interface Alignment {
+    GetBuffers(): Buffers;
+    SetValues(horizontal: Array<number>, vertical: Array<number>): void;
 }
 
 export interface IfcType {
@@ -426,6 +508,52 @@ export class IfcAPI {
         return this.wasmModule.GetGeometry(modelID, geometryExpressID);
     }
 
+    CreateAABB()
+    {
+        return this.wasmModule.CreateAABB();
+    }
+
+    CreateExtrusion()
+    {
+        return this.wasmModule.CreateExtrusion();
+    }
+
+    CreateSweep()
+    {
+        return this.wasmModule.CreateSweep();
+    }
+
+    CreateRevolution()
+    {
+        return this.wasmModule.CreateRevolution();
+    }
+
+    CreateCylindricalRevolution()
+    {
+        return this.wasmModule.CreateCylindricalRevolution();
+    }
+
+    CreateParabola()
+    {
+        return this.wasmModule.CreateParabola();
+    }
+
+    CreateClothoid()
+    {
+        return this.wasmModule.CreateClothoid();
+    }
+
+    CreateArc()
+    {
+        return this.wasmModule.CreateArc();
+    }
+
+    CreateAlignment()
+    {
+        return this.wasmModule.CreateAlignment();
+    }
+
+
     /**
      * Gets the header information required by the user
      * @param modelID Model handle retrieved by OpenModel
@@ -452,71 +580,87 @@ export class IfcAPI {
         return typesNames;
     }
 
+
+    /**
+     * Gets the ifc line data for a given express ID
+     * @param modelID Model handle retrieved by OpenModel
+     * @param expressID express ID of the line
+     * @param flatten recursively flatten the line, default false
+     * @param inverse get the inverse properties of the line, default false
+     * @param inversePropKey filters out all other properties from a inverse search, for a increase in performance. Default null
+     * @returns lineObject
+     */
+    GetLine(modelID: number, expressID: number, flatten = false, inverse = false, inversePropKey: string | null | undefined = null) {
+        return this.GetLines(modelID,[expressID],flatten,inverse,inversePropKey)[0];
+    }
+
+
 	/**
 	 * Gets the ifc line data for a given express ID
 	 * @param modelID Model handle retrieved by OpenModel
-	 * @param expressID express ID of the line
+	 * @param a list of expressID express ID of the line
 	 * @param flatten recursively flatten the line, default false
 	 * @param inverse get the inverse properties of the line, default false
 	 * @param inversePropKey filters out all other properties from a inverse search, for a increase in performance. Default null
 	 * @returns lineObject
 	 */
-    GetLine(modelID: number, expressID: number, flatten = false, inverse = false, inversePropKey: string | null | undefined = null) {
-        let expressCheck = this.wasmModule.ValidateExpressID(modelID, expressID);
-        if (!expressCheck) {
-            return;
-        }
-
-        let rawLineData = this.GetRawLineData(modelID, expressID);
-        let lineData;
-        try {
-            lineData = FromRawLineData[this.modelSchemaList[modelID]][rawLineData.type](rawLineData.arguments);
-            lineData.expressID = rawLineData.ID;
-        } catch (e) {
-           Log.error("Invalid IFC Line:"+expressID);
-	         // throw an error when the line is defined 
-           if (rawLineData.ID) {
-               throw e;
-           } else {
-               return;
+    GetLines(modelID: number, expressIDs: Array<number>, flatten = false, inverse = false, inversePropKey: string | null | undefined = null)  {
+        let outputLineData = [];
+        let rawLineDatas = this.GetRawLinesData(modelID, expressIDs);
+        let i=0;
+        for (const rawLineData of rawLineDatas) {
+            let lineData;
+            try {
+                lineData = FromRawLineData[this.modelSchemaList[modelID]][rawLineData.type](rawLineData.arguments);
+                lineData.expressID = rawLineData.ID;
+            } catch (e) {
+               Log.error("Invalid IFC Line:"+expressIDs[i]);
+    	         // throw an error when the line is defined 
+               if (rawLineData.ID) {
+                   throw e;
+               } else {
+                   continue;
+               }
            }
-       }
 
-        if (flatten) {
-            this.FlattenLine(modelID, lineData);
-        }
+            if (flatten) {
+                this.FlattenLine(modelID, lineData);
+            }
 
-        let inverseData = InversePropertyDef[this.modelSchemaList[modelID]][rawLineData.type];
-        if (inverse && inverseData != null) 
-        {
-          for (let inverseProp of inverseData) 
-          {
-            if (inversePropKey && inverseProp[0] !== inversePropKey) continue;
-			  
-            if (!inverseProp[3]) lineData[inverseProp[0]] = null;
-            else lineData[inverseProp[0]] = [];
-            
-            let targetTypes = [inverseProp[1]];
-            if (typeof InheritanceDef[this.modelSchemaList[modelID]][inverseProp[1]] != "undefined")
+            let inverseData = InversePropertyDef[this.modelSchemaList[modelID]][rawLineData.type];
+            if (inverse && inverseData != null) 
             {
-              targetTypes=targetTypes.concat(InheritanceDef[this.modelSchemaList[modelID]][inverseProp[1]]);
-            }
-            let inverseIDs = this.wasmModule.GetInversePropertyForItem(modelID, expressID, targetTypes, inverseProp[2], inverseProp[3]);
-            if (!inverseProp[3] && inverseIDs.size()>0) 
-            {
-              if (!flatten) lineData[inverseProp[0]] = { type: 5,  value: inverseIDs.get(0) };
-              else lineData[inverseProp[0]] = this.GetLine(modelID, inverseIDs.get(0));
-            }
-            else 
-            {
-                for (let x = 0; x < inverseIDs.size(); x++) {
-                  if (!flatten) lineData[inverseProp[0]].push({ type: 5,  value: inverseIDs.get(x) });
-                  else lineData[inverseProp[0]].push(this.GetLine(modelID, inverseIDs.get(x)));
+              for (let inverseProp of inverseData) 
+              {
+                if (inversePropKey && inverseProp[0] !== inversePropKey) continue;
+    			  
+                if (!inverseProp[3]) lineData[inverseProp[0]] = null;
+                else lineData[inverseProp[0]] = [];
+                
+                let targetTypes = [inverseProp[1]];
+                if (typeof InheritanceDef[this.modelSchemaList[modelID]][inverseProp[1]] != "undefined")
+                {
+                  targetTypes=targetTypes.concat(InheritanceDef[this.modelSchemaList[modelID]][inverseProp[1]]);
                 }
+                let inverseIDs = this.wasmModule.GetInversePropertyForItem(modelID, rawLineData.ID, targetTypes, inverseProp[2], inverseProp[3]);
+                if (!inverseProp[3] && inverseIDs.size()>0) 
+                {
+                  if (!flatten) lineData[inverseProp[0]] = { type: 5,  value: inverseIDs.get(0) };
+                  else lineData[inverseProp[0]] = this.GetLine(modelID, inverseIDs.get(0));
+                }
+                else 
+                {
+                    for (let x = 0; x < inverseIDs.size(); x++) {
+                      if (!flatten) lineData[inverseProp[0]].push({ type: 5,  value: inverseIDs.get(x) });
+                      else lineData[inverseProp[0]].push(this.GetLine(modelID, inverseIDs.get(x)));
+                    }
+                }
+              }
             }
-          }
+            outputLineData.push(lineData);
+            i++;
         }
-        return lineData;
+        return outputLineData;
     }
 
     /**
@@ -542,6 +686,17 @@ export class IfcAPI {
     }
 
     /**
+     * Creates a new ifc globally unqiue ID
+     * @param modelID Model handle retrieved by OpenModel
+     * @returns An randomly generated globally unique ID
+     */
+    CreateIFCGloballyUniqueId(modelID: number)  
+    {   
+        const guid = this.wasmModule.GenerateGuid(modelID);
+        return TypeInitialisers[this.modelSchemaList[modelID]][IFCGLOBALLYUNIQUEID](guid);
+    }
+
+    /**
      * Creates a new ifc type i.e. IfcLabel, IfcReal, ...
      * @param modelID Model handle retrieved by OpenModel
      * @param type Type code
@@ -560,7 +715,6 @@ export class IfcAPI {
      */
     GetNameFromTypeCode(type:number): string 
     {
-       Log.warn("GetNameFromTypeCode() now returns type names in camel case");
        return this.wasmModule.GetNameFromTypeCode(type);
     }
 
@@ -687,8 +841,13 @@ export class IfcAPI {
     }
 
     /** @ignore */
+    GetRawLinesData(modelID: number, expressIDs: Array<number>): Array<RawLineData> {
+        return this.wasmModule.GetLines(modelID, expressIDs) as Array<RawLineData>;
+    }
+
+    /** @ignore */
     GetRawLineData(modelID: number, expressID: number): RawLineData {
-        return this.wasmModule.GetLine(modelID, expressID) as RawLineData;
+        return this.GetRawLinesData(modelID, [expressID])[0] as RawLineData;
     }
 
     /** @ignore */
@@ -802,119 +961,70 @@ export class IfcAPI {
         const alignments = this.wasmModule.GetAllAlignments(modelID);
         const alignmentList = [];
         for (let i = 0; i < alignments.size(); i++) {
-          const alignment = alignments.get(i);
-          const horList = [];
-          for (let j = 0; j < alignment.Horizontal.curves.size(); j++) {
-            const curve = alignment.Horizontal.curves.get(j);
-            const ptList: Array<Point> = [];
-            for (let p = 0; p < curve.points.size(); p++) {
-              const pt = curve.points.get(p);
-              const newPoint = { x: pt.x, y: pt.y };
-              ptList.push(newPoint);
-            }
-            const dtList = [];
-            for (let p = 0; p < curve.userData.size(); p++) {
-                const dt = curve.userData.get(p);
-                dtList.push(dt);
-            }
-            const newCurve = { points: ptList, data: dtList };
-            horList.push(newCurve);
-          }
-          const verList = [];
-          for (let j = 0; j < alignment.Vertical.curves.size(); j++) {
-            const curve = alignment.Vertical.curves.get(j);
-            const ptList = [];
-            for (let p = 0; p < curve.points.size(); p++) {
-              const pt = curve.points.get(p);
-              const newPoint = { x: pt.x, y: pt.y };
-              ptList.push(newPoint);
-            }
-            const dtList = [];
-            for (let p = 0; p < curve.userData.size(); p++) {
-                const dt = curve.userData.get(p);
-                dtList.push(dt);
-            }
-            const newCurve = { points: ptList, data: dtList };
-            verList.push(newCurve);
-          }
-    
-          const curve3DList = [];
-          if (
-            alignment.Horizontal.curves.size() > 0 &&
-            alignment.Vertical.curves.size() > 0
-          ) {
-            const startH = { x: 0, y: 0, z: 0 };
-            const startV = { x: 0, y: 0, z: 0 };
-    
-            // Construct 3D polyline from horizontal and vertical polylines
-    
-            let lastx = 0;
-            let lasty = 0;
-            let length = 0;
+
+            const alignment = alignments.get(i);
+  
+            const horList = [];
             for (let j = 0; j < alignment.Horizontal.curves.size(); j++) {
-              const curve = alignment.Horizontal.curves.get(j);
-              const points = [];
-              for (let k = 0; k < curve.points.size(); k++) {
-                let alt = 0;
-                const pt = curve.points.get(k);
-                if (j === 0 && k === 0) {
-                  lastx = pt.x;
-                  lasty = pt.y;
+                const curve = alignment.Horizontal.curves.get(j);
+                const ptList: Array<Point> = [];
+                for (let p = 0; p < curve.points.size(); p++) {
+                    const pt = curve.points.get(p);
+                    const newPoint = { x: pt.x, y: pt.y };
+                    ptList.push(newPoint);
                 }
-                const valueX = pt.x - lastx;
-                const valueY = pt.y - lasty;
-                lastx = pt.x;
-                lasty = pt.y;
-                length += Math.sqrt(valueX * valueX + valueY * valueY);
-                let first = true;
-                let lastAlt = 0;
-                let lastX = 0;
-                let done = false;
-                for (let ii = 0; ii < alignment.Vertical.curves.size(); ii++) {
-                  const curve = alignment.Vertical.curves.get(ii);
-                  for (let jj = 0; jj < curve.points.size(); jj++) {
-                    const pt = curve.points.get(jj);
-                    if (first) {
-                      first = false;
-                      alt = pt.y;
-                      lastAlt = pt.y;
-                      if (pt.x >= length) {
-                        break;
-                      }
-                    }
-                    if (pt.x >= length) {
-                      const value1 = pt.x - lastX;
-                      const value2 = length - lastX;
-                      const value3 = value2 / value1;
-                      alt = lastAlt * (1 - value3) + pt.y * value3;
-                      done = true;
-                      break;
-                    }
-                    lastAlt = pt.y;
-                    lastX = pt.x;
-                  }
-                  if (done) {
-                    break;
-                  }
+                const dtList = [];
+                for (let p = 0; p < curve.userData.size(); p++) {
+                    const dt = curve.userData.get(p);
+                    dtList.push(dt);
                 }
-                points.push({
-                  x: pt.x - startH.x,
-                  y: alt - startV.y,
-                  z: startH.y - pt.y,
-                });
-              }
-              const newCurve = { points: points };
-              curve3DList.push(newCurve);
+                const newCurve = { points: ptList, data: dtList };
+                horList.push(newCurve);
             }
-          }
-    
-          const align = {
-            FlatCoordinationMatrix: this.GetCoordinationMatrix(modelID),
-            horizontal: horList,
-            vertical: verList,
-            curve3D: curve3DList,
-          };
-          alignmentList.push(align);
+
+            const verList = [];
+            for (let j = 0; j < alignment.Vertical.curves.size(); j++) {
+                const curve = alignment.Vertical.curves.get(j);
+                const ptList = [];
+                for (let p = 0; p < curve.points.size(); p++) {
+                    const pt = curve.points.get(p);
+                    const newPoint = { x: pt.x, y: pt.y };
+                    ptList.push(newPoint);
+                }
+                const dtList = [];
+                for (let p = 0; p < curve.userData.size(); p++) {
+                    const dt = curve.userData.get(p);
+                    dtList.push(dt);
+                }
+                const newCurve = { points: ptList, data: dtList };
+                verList.push(newCurve);
+            }
+
+            const curve3DList = [];
+            for (let j = 0; j < alignment.Absolute.curves.size(); j++) {
+                const curve = alignment.Absolute.curves.get(j);
+                const ptList = [];
+                for (let p = 0; p < curve.points.size(); p++) {
+                    const pt = curve.points.get(p);
+                    const newPoint = { x: pt.x, y: pt.y, z: pt.z };
+                    ptList.push(newPoint);
+                }
+                const dtList = [];
+                for (let p = 0; p < curve.userData.size(); p++) {
+                    const dt = curve.userData.get(p);
+                    dtList.push(dt);
+                }
+                const newCurve = { points: ptList, data: dtList };
+                curve3DList.push(newCurve);
+            }
+        
+            const align = {
+                FlatCoordinationMatrix: this.GetCoordinationMatrix(modelID),
+                horizontal: horList,
+                vertical: verList,
+                curve3D: curve3DList,
+            };
+            alignmentList.push(align);
 
         }
         return alignmentList;
